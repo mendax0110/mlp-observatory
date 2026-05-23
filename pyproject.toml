@@ -1,0 +1,47 @@
+[project]
+name = "mlp-observatory"
+version = "0.1.0"
+description = "Live browser visualization platform for MLP training and inference"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.31.0",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.6.0",
+  "torch==2.4.1",
+  "numpy>=2.1.0",
+  "rich>=13.9.0",
+  "psutil==6.1.0",
+  "pynvml==11.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.24.0",
+  "mypy>=1.12.0",
+  "ruff>=0.7.0",
+  "sphinx>=8.1.0",
+  "myst-parser>=4.0.0",
+]
+
+[project.scripts]
+mlp-observatory = "mlp_observatory.main:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["mlp_observatory"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.6.0,<0.7.0"]
+build-backend = "uv_build"
