@@ -10,24 +10,33 @@ from torch.utils.data import TensorDataset
 from mlp_observatory.domain.models import DataConfig, DataSourceType, ProjectConfig, TaskType
 
 
-def make_synthetic_binary_dataset(config: DataConfig) -> TensorDataset:
+def _make_features_and_weights(config: DataConfig,) -> tuple[np.random.Generator, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(config.seed)
     x = rng.normal(0.0, 1.0, size=(config.samples, config.features)).astype(np.float32)
-
     w = rng.normal(0.0, 1.0, size=(config.features, 1)).astype(np.float32)
-    logits = x @ w + config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32)
-    y = (logits > 0.0).astype(np.float32)
+    return rng, x, w
 
+def _make_linear_signal(config: DataConfig,) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(config.seed)
+    x = rng.normal(0.0, 1.0, size=(config.samples, config.features)).astype(np.float32)
+    w = rng.normal(0.0, 1.0, size=(config.features, 1)).astype(np.float32)
+    signal = x @ w
+    noise = (config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32))
+    return x, signal + noise
+
+
+def make_synthetic_binary_dataset(config: DataConfig) -> TensorDataset:
+    #rng, x, w = _make_features_and_weights(config)
+    #logits = x @ w + config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32)
+    x, logits = _make_linear_signal(config)
+    y = (logits > 0.0).astype(np.float32)
     return TensorDataset(torch.from_numpy(x), torch.from_numpy(y))
 
 
 def _make_synthetic_regression_dataset(config: DataConfig) -> TensorDataset:
-    rng = np.random.default_rng(config.seed)
-    x = rng.normal(0.0, 1.0, size=(config.samples, config.features)).astype(np.float32)
-
-    w = rng.normal(0.0, 1.0, size=(config.features, 1)).astype(np.float32)
-    y = x @ w + config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32)
-
+    #rng, x, w = _make_features_and_weights(config)
+    #y = x @ w + config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32)
+    x, y = _make_linear_signal(config)
     return TensorDataset(torch.from_numpy(x), torch.from_numpy(y))
 
 
@@ -71,8 +80,10 @@ def _make_csv_dataset(config: DataConfig, task: TaskType) -> TensorDataset:
     if task == TaskType.binary_classification:
         unique = set(np.unique(y).tolist())
         if not unique.issubset({0.0, 1.0}):
-            y = (y > 0.5).astype(np.float32)
-
+            #y = (y > 0.5).astype(np.float32)
+            raise ValueError(
+                "Binary classification target must contain only 0 and 1 values"
+            )
     return TensorDataset(torch.from_numpy(x), torch.from_numpy(y))
 
 

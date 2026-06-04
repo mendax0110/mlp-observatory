@@ -7,6 +7,13 @@ from torch import nn
 
 from mlp_observatory.domain.models import LayerConfig, ModelConfig
 
+_ACTIVATIONS = {
+    "relu": lambda: nn.ReLU(),
+    "tanh": lambda: nn.Tanh(),
+    "silu": lambda: nn.SiLU(),
+    "gelu": lambda: nn.GELU(),
+    "leaky_relu": lambda: nn.LeakyReLU(negative_slope=0.1)
+}
 
 class ModelStrategy(nn.Module, ABC):
     @abstractmethod
@@ -23,16 +30,8 @@ class ModelStrategy(nn.Module, ABC):
 
 
 def _build_activation(name: str) -> nn.Module:
-    if name == "relu":
-        return nn.ReLU()
-    if name == "tanh":
-        return nn.Tanh()
-    if name == "silu":
-        return nn.SiLU()
-    if name == "leaky_relu":
-        return nn.LeakyReLU(negative_slope=0.1)
-    return nn.GELU()
-
+    activations = _ACTIVATIONS.get(name, _ACTIVATIONS["gelu"])
+    return activations()
 
 def _build_norm(name: str, dim: int) -> nn.Module:
     if name == "batchnorm":
@@ -62,6 +61,16 @@ class MlpPredictor(ModelStrategy):
             in_dim = layer.units
 
         self.output = nn.Linear(in_dim, 1)
+        
+    def _apply_residual(self, h: torch.Tensor, hidden_states: list[torch.Tensor], layer_index: int) -> torch.Tensor:
+        if not self.residual_every_2:
+            return h
+        if layer_index < 2:
+            return h
+        skip = hidden_states[layer_index - 2]
+        if skip.shape[-1] == h.shape[-1]:
+            h = h + skip
+        return h
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = x
@@ -71,10 +80,7 @@ class MlpPredictor(ModelStrategy):
             h = linear(out)
             h = norm(h)
             h = activation(h)
-            if self.residual_every_2 and i >= 2:
-                skip = hidden_states[i - 2]
-                if skip.shape[-1] == h.shape[-1]:
-                    h = h + skip
+            h = self._apply_residual(h, hidden_states, i)
             hidden_states.append(h)
             out = dropout(h)
 
@@ -96,8 +102,7 @@ class MlpPredictor(ModelStrategy):
             h = linear(out)
             h = norm(h)
             h = activation(h)
-            if self.residual_every_2 and i > 2 and hidden_activations[i - 3].shape[-1] == h.shape[-1]:
-                h = h + hidden_activations[i - 3]
+            h = self._apply_residual(h, hidden_activations, i - 1)
             hidden_activations.append(h)
             trace.append({"layer": f"hidden_{i}", "values": h[sample_idx].detach().flatten()[:24].cpu().tolist()})
             out = dropout(h)
