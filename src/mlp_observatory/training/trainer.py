@@ -204,7 +204,8 @@ class Trainer:
 
             prev_weights = [p.detach().clone() for p in self.model.parameters() if p.requires_grad]
 
-            with torch.cuda.amp.autocast(enabled=self._amp_enabled):
+            #with torch.cuda.amp.autocast(enabled=self._amp_enabled):
+            with torch.amp.autocast('cuda', enabled=self._amp_enabled):
                 logits, hidden_acts, forward_trace = self.model.forward_with_diagnostics(
                     x,
                     trace_sample_index=self.config.train.trace_sample_index,

@@ -12,7 +12,7 @@ from mlp_observatory.core.settings import settings
 
 
 def create_app() -> FastAPI:
-    configure_logging()
+    #configure_logging()
     app = FastAPI(title="MLP Observatory", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
