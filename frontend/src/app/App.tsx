@@ -48,11 +48,18 @@ type EpochPayload = {
     };
   };
 };
+
+type Suggestion = {
+  message: string;
+  config_patch: RunConfig | null;
+};
+
 type SummaryPayload = {
   best_val_loss: number;
   best_val_accuracy: number;
   epochs: number;
   recommendations?: string[];
+  suggestions?: Suggestion[];
   diagnostics?: {
     avg_dead_neuron_ratio?: number[];
     avg_grad_norm?: number[];
@@ -952,7 +959,14 @@ export function App(): JSX.Element {
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <RecommendationsView recommendations={summary?.recommendations ?? []} />
+        <RecommendationsView
+          recommendations={summary?.recommendations ?? []}
+          suggestions={summary?.suggestions ?? []}
+          onApplySuggestion={(patch) => {
+            setRunConfig(patch as RunConfig);
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        />
       </div>
 
       <div style={{ marginTop: 12 }}>

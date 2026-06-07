@@ -172,6 +172,7 @@ class RunService:
 
             best = min(history, key=lambda x: x.val_loss)
             recommendations = RunEvaluator.evaluate(cfg, history, diagnostics)
+            suggestions = RunEvaluator.suggest_config(cfg, history, diagnostics)
             summary = {
                 "run_id": run_id,
                 "best_val_loss": best.val_loss,
@@ -179,6 +180,13 @@ class RunService:
                 "epochs": len(history),
                 "diagnostics": diagnostics,
                 "recommendations": recommendations,
+                "suggestions": [
+                    {
+                        "message": s.message,
+                        "config_patch": asdict(s.config_patch) if s.config_patch is not None else None,
+                    }
+                    for s in suggestions
+                ],
                 "feature_importance": final.get("feature_importance"),
             }
             self.repo.save_history(run_dir, history)
