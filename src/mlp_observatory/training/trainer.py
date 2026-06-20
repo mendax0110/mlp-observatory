@@ -54,6 +54,24 @@ class Trainer:
                 momentum=cfg.momentum,
                 weight_decay=(0.0 if cfg.weight_decay_decoupled else cfg.weight_decay),
             )
+        if cfg.optimizer == "adamw":
+            return torch.optim.AdamW(
+                params,
+                lr=cfg.learning_rate,
+                weight_decay=(0.0 if cfg.weight_decay_decoupled else cfg.weight_decay),
+            )
+        if cfg.optimizer == "adam":
+            return torch.optim.Adam(
+                params,
+                lr=cfg.learning_rate,
+                weight_decay=(0.0 if cfg.weight_decay_decoupled else cfg.weight_decay),
+            )
+        if cfg.optimizer == "adagrad":
+            return torch.optim.Adagrad(
+                params,
+                lr=cfg.learning_rate,
+                weight_decay=(0.0 if cfg.weight_decay_decoupled else cfg.weight_decay),
+            )
         return torch.optim.AdamW(params, lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
 
     def _build_scheduler(self, steps_per_epoch: int) -> None:

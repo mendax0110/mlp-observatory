@@ -26,16 +26,12 @@ def _make_linear_signal(config: DataConfig,) -> tuple[np.ndarray, np.ndarray]:
 
 
 def make_synthetic_binary_dataset(config: DataConfig) -> TensorDataset:
-    #rng, x, w = _make_features_and_weights(config)
-    #logits = x @ w + config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32)
     x, logits = _make_linear_signal(config)
     y = (logits > 0.0).astype(np.float32)
     return TensorDataset(torch.from_numpy(x), torch.from_numpy(y))
 
 
 def _make_synthetic_regression_dataset(config: DataConfig) -> TensorDataset:
-    #rng, x, w = _make_features_and_weights(config)
-    #y = x @ w + config.noise * rng.normal(0.0, 1.0, size=(config.samples, 1)).astype(np.float32)
     x, y = _make_linear_signal(config)
     return TensorDataset(torch.from_numpy(x), torch.from_numpy(y))
 

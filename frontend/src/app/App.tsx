@@ -140,7 +140,7 @@ type RunConfig = {
     learning_rate: number;
     weight_decay: number;
     weight_decay_decoupled: boolean;
-    optimizer: "adamw" | "sgd" | "rmsprop";
+    optimizer: "adamw" | "sgd" | "rmsprop" | "adam" | "adagrad";
     scheduler: "none" | "cosine" | "one_cycle" | "step";
     scheduler_step_size: number;
     scheduler_gamma: number;

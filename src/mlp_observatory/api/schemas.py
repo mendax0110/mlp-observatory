@@ -37,7 +37,7 @@ class TrainConfigRequest(BaseModel):
     learning_rate: float = Field(default=1e-3, gt=0.0)
     weight_decay: float = Field(default=1e-4, ge=0.0)
     weight_decay_decoupled: bool = True
-    optimizer: Literal["adamw", "sgd", "rmsprop"] = "adamw"
+    optimizer: Literal["adamw", "sgd", "rmsprop", "adam", "adagrad"] = "adamw"
     scheduler: Literal["none", "cosine", "one_cycle", "step"] = "none"
     scheduler_step_size: int = Field(default=10, ge=1)
     scheduler_gamma: float = Field(default=0.5, gt=0.0, lt=1.0)
