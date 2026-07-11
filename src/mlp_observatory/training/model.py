@@ -3,9 +3,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import torch
+import logging
 from torch import nn
 
 from mlp_observatory.domain.models import LayerConfig, ModelConfig
+
+logger = logging.getLogger(__name__)
+
+_TRACE_VALUE_LIMIT = 24
 
 _ACTIVATIONS = {
     "relu": lambda: nn.ReLU(),
@@ -13,6 +18,18 @@ _ACTIVATIONS = {
     "silu": lambda: nn.SiLU(),
     "gelu": lambda: nn.GELU(),
     "leaky_relu": lambda: nn.LeakyReLU(negative_slope=0.1)
+}
+
+_NORMS = {
+    "batchnorm": lambda dim: nn.BatchNorm1d(dim),
+    "layernorm": lambda dim: nn.LayerNorm(dim),
+    "none": lambda dim: nn.Identity()
+}
+
+_INIT_STRATEGIES = {
+    "kaiming": lambda w: nn.init.kaiming_uniform_(w, nonlinearity="relu"),
+    "orthogonal":lambda w: nn.init.orthogonal_(w),
+    "xavier": lambda w: nn.init.xavier_uniform_(w), 
 }
 
 class ModelStrategy(nn.Module, ABC):
@@ -30,16 +47,32 @@ class ModelStrategy(nn.Module, ABC):
 
 
 def _build_activation(name: str) -> nn.Module:
-    activations = _ACTIVATIONS.get(name, _ACTIVATIONS["gelu"])
-    return activations()
-
+    try:
+        activations = _ACTIVATIONS.get(name, _ACTIVATIONS["gelu"])
+        return activations()
+    except KeyError:
+        raise ValueError(f"Unsupported activation type: {name}, supported types are: {list(_ACTIVATIONS.keys())}") from None
+    
 def _build_norm(name: str, dim: int) -> nn.Module:
-    if name == "batchnorm":
-        return nn.BatchNorm1d(dim)
-    if name == "layernorm":
-        return nn.LayerNorm(dim)
-    return nn.Identity()
+    try:
+        norms = _NORMS.get(name, _NORMS["none"])
+        return norms(dim)
+    except KeyError:
+        raise ValueError(f"Unsupported normalization type: {name}, supported types are: {list(_NORMS.keys())}") from None
 
+def _clamp_sample_index(trace_sample_index: int, batch_size: int) -> int:
+    return int(max(0, min(trace_sample_index, batch_size - 1)))
+
+def _trace_entry(
+    layer_name: str,
+    tensor: torch.Tensor,
+    sample_idx: int,
+    limit: int | None = _TRACE_VALUE_LIMIT,
+) -> dict[str, object]:
+    values = tensor[sample_idx].detach().flatten()
+    if limit is not None:
+        values = values[:limit]
+    return {"layer": layer_name, "values": values.cpu().tolist()}
 
 class MlpPredictor(ModelStrategy):
     def __init__(self, config: ModelConfig, input_dim: int) -> None:
@@ -69,10 +102,11 @@ class MlpPredictor(ModelStrategy):
             return h
         skip = hidden_states[layer_index - 2]
         if skip.shape[-1] == h.shape[-1]:
-            h = h + skip
+            return h + skip
+        logger.debug(f"Skipping residual connection at layer {layer_index} due to shape mismatch: skip {skip.shape}, h {h.shape}")
         return h
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    
+    def _run_layers(self, x: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         out = x
         hidden_states: list[torch.Tensor] = []
 
@@ -84,32 +118,30 @@ class MlpPredictor(ModelStrategy):
             hidden_states.append(h)
             out = dropout(h)
 
-        return self.output(out)
+        return out, hidden_states
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits, _ = self._run_layers(x)
+        return logits
 
     def forward_with_diagnostics(
         self,
         x: torch.Tensor,
         trace_sample_index: int,
     ) -> tuple[torch.Tensor, list[torch.Tensor], list[dict[str, object]]]:
-        out = x
-        hidden_activations: list[torch.Tensor] = []
-        trace: list[dict[str, object]] = []
-
-        sample_idx = int(max(0, min(trace_sample_index, x.shape[0] - 1)))
-        trace.append({"layer": "input", "values": x[sample_idx].detach().flatten()[:24].cpu().tolist()})
-
-        for i, (linear, norm, activation, dropout) in enumerate(zip(self.linears, self.norms, self.activations, self.dropouts), start=1):
-            h = linear(out)
-            h = norm(h)
-            h = activation(h)
-            h = self._apply_residual(h, hidden_activations, i - 1)
-            hidden_activations.append(h)
-            trace.append({"layer": f"hidden_{i}", "values": h[sample_idx].detach().flatten()[:24].cpu().tolist()})
-            out = dropout(h)
-
+        sample_idx = _clamp_sample_index(trace_sample_index, x.shape[0])
+        out, hidden_states = self._run_layers(x)
+        
         logits = self.output(out)
-        trace.append({"layer": "output", "values": logits[sample_idx].detach().flatten().cpu().tolist()})
-        return logits, hidden_activations, trace
+        
+        trace: list[dict[str, object]] = [_trace_entry("input", x, sample_idx)]
+        trace.extend(
+            _trace_entry(f"hidden_{i}", h, sample_idx)
+            for i, h in enumerate(hidden_states, start=1)
+        )
+        trace.append(_trace_entry("output", logits, sample_idx, limit=None))
+        
+        return logits, hidden_states, trace
 
 
 class LinearPredictor(ModelStrategy):
@@ -128,21 +160,17 @@ class LinearPredictor(ModelStrategy):
         sample_idx = int(max(0, min(trace_sample_index, x.shape[0] - 1)))
         logits = self.output(x)
         trace = [
-            {"layer": "input", "values": x[sample_idx].detach().flatten()[:24].cpu().tolist()},
-            {"layer": "output", "values": logits[sample_idx].detach().flatten().cpu().tolist()},
+            _trace_entry("input", x, sample_idx),
+            _trace_entry("output", logits, sample_idx, limit=None),
         ]
         return logits, [], trace
 
 
 def _initialize(model: nn.Module, strategy: str) -> None:
+    init_fn = _INIT_STRATEGIES.get(strategy, _INIT_STRATEGIES["xavier"])
     for module in model.modules():
         if isinstance(module, nn.Linear):
-            if strategy == "kaiming":
-                nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-            elif strategy == "orthogonal":
-                nn.init.orthogonal_(module.weight)
-            else:
-                nn.init.xavier_uniform_(module.weight)
+            init_fn(module.weight)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
