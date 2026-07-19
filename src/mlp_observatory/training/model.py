@@ -28,9 +28,10 @@ _NORMS = {
 
 _INIT_STRATEGIES = {
     "kaiming": lambda w: nn.init.kaiming_uniform_(w, nonlinearity="relu"),
-    "orthogonal":lambda w: nn.init.orthogonal_(w),
-    "xavier": lambda w: nn.init.xavier_uniform_(w), 
+    "orthogonal": lambda w: nn.init.orthogonal_(w),
+    "xavier": lambda w: nn.init.xavier_uniform_(w),
 }
+
 
 class ModelStrategy(nn.Module, ABC):
     @abstractmethod
@@ -47,21 +48,24 @@ class ModelStrategy(nn.Module, ABC):
 
 
 def _build_activation(name: str) -> nn.Module:
-    try:
-        activations = _ACTIVATIONS.get(name, _ACTIVATIONS["gelu"])
-        return activations()
-    except KeyError:
-        raise ValueError(f"Unsupported activation type: {name}, supported types are: {list(_ACTIVATIONS.keys())}") from None
-    
+    if name not in _ACTIVATIONS:
+        raise ValueError(
+            f"Unsupported activation type: {name}, supported types are: {list(_ACTIVATIONS.keys())}"
+        )
+    return _ACTIVATIONS[name]()
+
+
 def _build_norm(name: str, dim: int) -> nn.Module:
-    try:
-        norms = _NORMS.get(name, _NORMS["none"])
-        return norms(dim)
-    except KeyError:
-        raise ValueError(f"Unsupported normalization type: {name}, supported types are: {list(_NORMS.keys())}") from None
+    if name not in _NORMS:
+        raise ValueError(
+            f"Unsupported normalization type: {name}, supported types are: {list(_NORMS.keys())}"
+        )
+    return _NORMS[name](dim)
+
 
 def _clamp_sample_index(trace_sample_index: int, batch_size: int) -> int:
     return int(max(0, min(trace_sample_index, batch_size - 1)))
+
 
 def _trace_entry(
     layer_name: str,
@@ -73,6 +77,7 @@ def _trace_entry(
     if limit is not None:
         values = values[:limit]
     return {"layer": layer_name, "values": values.cpu().tolist()}
+
 
 class MlpPredictor(ModelStrategy):
     def __init__(self, config: ModelConfig, input_dim: int) -> None:
@@ -94,7 +99,7 @@ class MlpPredictor(ModelStrategy):
             in_dim = layer.units
 
         self.output = nn.Linear(in_dim, 1)
-        
+
     def _apply_residual(self, h: torch.Tensor, hidden_states: list[torch.Tensor], layer_index: int) -> torch.Tensor:
         if not self.residual_every_2:
             return h
@@ -103,9 +108,14 @@ class MlpPredictor(ModelStrategy):
         skip = hidden_states[layer_index - 2]
         if skip.shape[-1] == h.shape[-1]:
             return h + skip
-        logger.debug(f"Skipping residual connection at layer {layer_index} due to shape mismatch: skip {skip.shape}, h {h.shape}")
+        logger.debug(
+            "Skipping residual connection at layer %s due to shape mismatch: skip %s, h %s",
+            layer_index,
+            skip.shape,
+            h.shape,
+        )
         return h
-    
+
     def _run_layers(self, x: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         out = x
         hidden_states: list[torch.Tensor] = []
@@ -131,16 +141,16 @@ class MlpPredictor(ModelStrategy):
     ) -> tuple[torch.Tensor, list[torch.Tensor], list[dict[str, object]]]:
         sample_idx = _clamp_sample_index(trace_sample_index, x.shape[0])
         out, hidden_states = self._run_layers(x)
-        
+
         logits = self.output(out)
-        
+
         trace: list[dict[str, object]] = [_trace_entry("input", x, sample_idx)]
         trace.extend(
             _trace_entry(f"hidden_{i}", h, sample_idx)
             for i, h in enumerate(hidden_states, start=1)
         )
         trace.append(_trace_entry("output", logits, sample_idx, limit=None))
-        
+
         return logits, hidden_states, trace
 
 
@@ -157,7 +167,7 @@ class LinearPredictor(ModelStrategy):
         x: torch.Tensor,
         trace_sample_index: int,
     ) -> tuple[torch.Tensor, list[torch.Tensor], list[dict[str, object]]]:
-        sample_idx = int(max(0, min(trace_sample_index, x.shape[0] - 1)))
+        sample_idx = _clamp_sample_index(trace_sample_index, x.shape[0])
         logits = self.output(x)
         trace = [
             _trace_entry("input", x, sample_idx),

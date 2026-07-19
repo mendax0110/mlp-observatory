@@ -17,6 +17,10 @@ class DataSourceType(str, Enum):
 
 ActivationName = Literal["relu", "gelu", "tanh", "silu", "leaky_relu"]
 NormName = Literal["none", "batchnorm", "layernorm"]
+ModelFamily = Literal["mlp", "linear"]
+InitStrategy = Literal["kaiming", "orthogonal", "xavier"]
+OptimizerName = Literal["adamw", "adam", "sgd", "rmsprop", "adagrad"]
+SchedulerName = Literal["none", "cosine", "step", "one_cycle"]
 
 
 @dataclass(slots=True)
@@ -41,10 +45,10 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
-    family: str = "mlp"
+    family: ModelFamily = "mlp"
     layers: list[LayerConfig] = field(default_factory=lambda: [LayerConfig(units=96), LayerConfig(units=96), LayerConfig(units=64)])
     residual_every_2: bool = False
-    initialization: str = "xavier"
+    initialization: InitStrategy = "xavier"
     preset: str = "stable_deep"
 
 
@@ -55,8 +59,8 @@ class TrainConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     weight_decay_decoupled: bool = True
-    optimizer: str = "adamw"
-    scheduler: str = "none"
+    optimizer: OptimizerName = "adamw"
+    scheduler: SchedulerName = "none"
     scheduler_step_size: int = 10
     scheduler_gamma: float = 0.5
     one_cycle_max_lr: float | None = None
@@ -69,7 +73,7 @@ class TrainConfig:
     l1_lambda: float = 0.0
     l2_lambda: float = 0.0
     input_normalization: bool = True
-    seed: int = 7
+    seed: int = 7  # seeds model init / training-time randomness (dropout, shuffling, etc.)
     device: str = "auto"
     trace_sample_index: int = 0
 

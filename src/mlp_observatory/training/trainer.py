@@ -222,7 +222,6 @@ class Trainer:
 
             prev_weights = [p.detach().clone() for p in self.model.parameters() if p.requires_grad]
 
-            #with torch.cuda.amp.autocast(enabled=self._amp_enabled):
             with torch.amp.autocast('cuda', enabled=self._amp_enabled):
                 logits, hidden_acts, forward_trace = self.model.forward_with_diagnostics(
                     x,
@@ -272,7 +271,7 @@ class Trainer:
             total += float(loss.item())
             batches += 1
 
-            diag_acc = self._accumulate(diag_acc, dead_ratios, grad_norms, weight_updates)
+            self._accumulate(diag_acc, dead_ratios, grad_norms, weight_updates)
             grad_norm_acc.append(grad_norms)
             weight_norm_acc.append(weight_norms)
             update_ratio_acc.append(update_ratios)
