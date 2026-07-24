@@ -124,8 +124,9 @@ class Trainer:
         self._set_seed(self.config.train.seed)
         dataset = self._normalize_input(dataset)
         train_set, val_set = self._split(dataset)
-        train_loader = DataLoader(train_set, batch_size=self.config.train.batch_size, shuffle=True)
-        val_loader = DataLoader(val_set, batch_size=self.config.train.batch_size, shuffle=False)
+        use_pinned_memory = self.device.type == "cuda"
+        train_loader = DataLoader(train_set, batch_size=self.config.train.batch_size, shuffle=True, pin_memory=use_pinned_memory)
+        val_loader = DataLoader(val_set, batch_size=self.config.train.batch_size, shuffle=False, pin_memory=use_pinned_memory)
         self._build_scheduler(len(train_loader))
 
         history: list[EpochMetrics] = []
@@ -215,6 +216,7 @@ class Trainer:
         latest_activation_stds: list[list[float]] = []
         latest_weight_sample: list[float] = []
         latest_forward_trace: list[dict[str, object]] = []
+        total_steps = len(train_loader)
 
         for step, (x, y) in enumerate(train_loader, start=1):
             x = x.to(self.device)
@@ -251,22 +253,26 @@ class Trainer:
             grad_norms = self._layer_grad_norms()
             dead_ratios = self._dead_neuron_ratios(hidden_acts)
             saturation = self._saturation_stats(hidden_acts)
-            activation_means = [a.detach().mean(dim=0)[:24].cpu().tolist() for a in hidden_acts]
-            activation_stds = [a.detach().std(dim=0)[:24].cpu().tolist() for a in hidden_acts]
-            activation_hists = [self._histogram(a) for a in hidden_acts]
+            
+            is_snapshot_step = (step % update_every_steps == 0) or (step == total_steps)
+            if is_snapshot_step:            
+                activation_means = [a.detach().mean(dim=0)[:24].cpu().tolist() for a in hidden_acts]
+                activation_stds = [a.detach().std(dim=0)[:24].cpu().tolist() for a in hidden_acts]
+                activation_hists = [self._histogram(a) for a in hidden_acts]
 
-            latest_activation_means = activation_means
-            latest_activation_stds = activation_stds
-            latest_activation_hist = activation_hists
-            latest_forward_trace = forward_trace
-            latest_weight_sample = self._sample_weights()
+                latest_activation_means = activation_means
+                latest_activation_stds = activation_stds
+                latest_activation_hist = activation_hists
+                latest_forward_trace = forward_trace
+                latest_weight_sample = self._sample_weights()
 
             weight_norms = self._layer_weight_norms()
             weight_updates = self._weight_update_norms(prev_weights)
             update_ratios = [u / (w + 1e-8) for u, w in zip(weight_updates, weight_norms)]
-
-            latest_weight_hist = self._param_histograms(use_grad=False)
-            latest_grad_hist = self._param_histograms(use_grad=True)
+            
+            if step == total_steps:
+                latest_weight_hist = self._param_histograms(use_grad=False)
+                latest_grad_hist = self._param_histograms(use_grad=True)
 
             total += float(loss.item())
             batches += 1
@@ -463,12 +469,11 @@ class Trainer:
         return {"near_zero": near_zero, "high_mag": high_mag}
 
     def _layer_grad_norms(self) -> list[float]:
-        norms: list[float] = []
-        for p in self.model.parameters():
-            if p.grad is None:
-                continue
-            norms.append(float(p.grad.detach().norm().item()))
-        return norms[:24]
+        #norms: list[float] = []
+        norms = [p.grad.detach().norm() for p in self.model.parameters() if p.grad is not None]
+        if not norms:
+            return []
+        return torch.stack(norms).cpu().tolist()[:24]
 
     def _layer_weight_norms(self) -> list[float]:
         norms: list[float] = []
