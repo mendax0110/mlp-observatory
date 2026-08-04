@@ -17,22 +17,27 @@ class LocalRunRepository:
         self._normalize_existing_runs()
 
     def save_history(self, run_dir: Path, history: list[EpochMetrics]) -> None:
-        payload = [asdict(x) for x in history]
-        (run_dir / "history.json").write_text(json.dumps(payload, indent=2))
+        history_dicts = [asdict(epoch) for epoch in history]
+        self._write_json(run_dir / "history.json", history_dicts)
 
     def save_summary(self, run_dir: Path, summary: dict[str, Any]) -> None:
-        (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        self._write_json(run_dir / "summary.json", summary)
 
     def save_system_stats(self, run_dir: Path, stats: list[dict[str, Any]]) -> None:
-        (run_dir / "system_stats.json").write_text(json.dumps(stats, indent=2))
+        self._write_json(run_dir / "system_stats.json", stats)
 
     def _read_json(self, path: Path) -> dict[str, Any] | None:
         if not path.exists():
             return None
-        return json.loads(path.read_text())
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
-        path.write_text(json.dumps(payload, indent=2))
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(path)
 
     def _parse_created_at(self, run_id: str, fallback_path: Path) -> str:
         try:
@@ -47,6 +52,9 @@ class LocalRunRepository:
         if (run_dir / "history.json").exists():
             return "stopped"
         return "unknown"
+    
+    def _iter_run_dirs(self):
+        return (path for path in sorted(self.root.glob("run-*"), reverse=True) if path.is_dir())
 
     def _normalize_existing_runs(self) -> None:
         for path in self.root.glob("run-*"):
