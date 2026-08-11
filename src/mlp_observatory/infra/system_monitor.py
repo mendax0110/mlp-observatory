@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any, Awaitable, Callable
 
@@ -19,20 +20,36 @@ from pynvml import (
 
 logger = logging.getLogger(__name__)
 
+_BYTES_PER_GB = 1024**3
+_BYTES_PER_MB = 1024**2
+
+_nvml_lock = threading.Lock()
 _nvml_initialized = False
+_nvml_unavailable = False
 _nvml_handle = None
 
 
 def _init_nvml() -> None:
-    global _nvml_initialized, _nvml_handle
+    global _nvml_initialized, _nvml_unavailable,_nvml_handle
 
     if _nvml_initialized:
         return
-
-    nvmlInit()
-    _nvml_handle = nvmlDeviceGetHandleByIndex(0)
-    _nvml_initialized = True
-
+    if _nvml_unavailable:
+        raise RuntimeError("NVIDIA NVML is unavailable")
+    
+    with _nvml_lock:
+        if _nvml_initialized:
+            return
+        if _nvml_unavailable:
+            raise RuntimeError("NVIDIA NVML is unavailable")
+        try:
+            nvmlInit()
+            _nvml_handle = nvmlDeviceGetHandleByIndex(0)
+            _nvml_initialized = True
+        except Exception as e:
+            logger.warning("Failed to initialize NVIDIA NVML: %s", e)
+            _nvml_unavailable = True
+            raise RuntimeError("NVIDIA NVML is unavailable") from e
 
 class SystemMonitor:
     @staticmethod
@@ -41,8 +58,8 @@ class SystemMonitor:
         stats: dict[str, Any] = {
             "cpu_percent": psutil.cpu_percent(interval=None),
             "ram_percent": vm.percent,
-            "ram_used_gb": round(vm.used / (1024**3), 2),
-            "ram_total_gb": round(vm.total / (1024**3), 2),
+            "ram_used_gb": round(vm.used / _BYTES_PER_GB, 2),
+            "ram_total_gb": round(vm.total / _BYTES_PER_GB, 2),
             "gpu": SystemMonitor._read_nvidia(),
         }
         return stats
@@ -62,22 +79,25 @@ class SystemMonitor:
             except Exception:
                 power = None
                 logger.debug("NVIDIA power usage not available", exc_info=True)
+            
             name = nvmlDeviceGetName(_nvml_handle)
-
             if isinstance(name, bytes):
                 name = name.decode("utf-8")
 
             return {
                 "util_percent": float(util.gpu),
-                "mem_used_mb": round(mem.used / (1024**2), 2),
-                "mem_total_mb": round(mem.total / (1024**2), 2),
+                "mem_used_mb": round(mem.used / _BYTES_PER_MB, 2),
+                "mem_total_mb": round(mem.total / _BYTES_PER_MB, 2),
                 "temp_c": float(temp),
                 "power_w": float(power) if power is not None else None,
                 "name": name,
             }
 
         except Exception:
-            logger.debug("NVIDIA monitoring unavailable", exc_info=True)
+            if _nvml_unavailable:
+                logger.debug("NVIDIA monitoring unavailable", exc_info=True)
+            else:
+                logger.warning("Failed to read NVIDIA stats", exc_info=True)
             return None
 
     @staticmethod
@@ -88,9 +108,12 @@ class SystemMonitor:
     ) -> None:
         logger.info("System monitor stream started for %s", run_id)
         while not stop_event.is_set():
-            stats = SystemMonitor.read_stats()
+            stats = await asyncio.to_thread(SystemMonitor.read_stats)
             stats["ts"] = time.time()
-            await publish({"event": "system_stats", "run_id": run_id, "payload": stats})
+            try:
+                await publish({"event": "system_stats", "run_id": run_id, "payload": stats})
+            except Exception:
+                logger.warning("Failed to publish system stats for %s", run_id, exc_info=True)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=1.0)
             except asyncio.TimeoutError:
