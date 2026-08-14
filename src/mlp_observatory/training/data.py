@@ -9,13 +9,6 @@ from torch.utils.data import TensorDataset
 
 from mlp_observatory.domain.models import DataConfig, DataSourceType, ProjectConfig, TaskType
 
-
-def _make_features_and_weights(config: DataConfig,) -> tuple[np.random.Generator, np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(config.seed)
-    x = rng.normal(0.0, 1.0, size=(config.samples, config.features)).astype(np.float32)
-    w = rng.normal(0.0, 1.0, size=(config.features, 1)).astype(np.float32)
-    return rng, x, w
-
 def _make_linear_signal(config: DataConfig,) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(config.seed)
     x = rng.normal(0.0, 1.0, size=(config.samples, config.features)).astype(np.float32)
