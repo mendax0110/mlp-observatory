@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,9 @@ from mlp_observatory.visualization.network_graph import NetworkGraphBuilder
 
 logger = logging.getLogger(__name__)
 
+class _QueueSentinel:
+    __slots__ = ()
+
 
 class RunService:
     def __init__(self, repo: LocalRunRepository, hub: WebSocketHub) -> None:
@@ -35,7 +39,7 @@ class RunService:
         self._latest_trace: dict[str, list[dict[str, object]]] = {}
         self._system_stats_history: dict[str, list[dict[str, Any]]] = {}
         self._queue_maxsize = 256
-        self._queue_sentinel = object()
+        self._queue_sentinel = _QueueSentinel()
 
     def start_run(self, task: TaskType, data: DataConfig, model: ModelConfig, train: TrainConfig) -> str:
         run_id, run_dir = self.repo.create_run_dir()
@@ -92,10 +96,11 @@ class RunService:
     def get_system_stats(self, run_id: str) -> list[dict[str, Any]] | None:
         stats = self._system_stats_history.get(run_id)
         if stats is None:
-            stats = self.repo.load_system_stats(run_id)
-            if stats is not None:
+            loaded = self.repo.load_system_stats(run_id)
+            if loaded is not None:
+                stats = deque(loaded, maxlen=2000)
                 self._system_stats_history[run_id] = stats
-        return stats
+        return list(stats) if stats is not None else None
 
     async def _send_event(self, run_id: str, queue: asyncio.Queue[dict[str, Any] | object]) -> None:
         while True:
@@ -129,18 +134,15 @@ class RunService:
                 trace = payload.get("payload", {}).get("forward_trace")
                 if isinstance(trace, list):
                     self._latest_trace[run_id] = trace
-            self._events.setdefault(run_id, []).append(payload)
-            self._events[run_id] = self._events[run_id][-1000:]
+            self._events.setdefault(run_id, deque(maxlen=1000)).append(payload)
             await enqueue(payload, drop_if_full=(event.event == "batch_update"))
 
         async def publish_raw(raw: dict[str, Any]) -> None:
-            self._events.setdefault(run_id, []).append(raw)
-            self._events[run_id] = self._events[run_id][-1000:]
+            self._events.setdefault(run_id, deque(maxlen=1000)).append(raw)
             if raw.get("event") == "system_stats":
                 stats = raw.get("payload")
                 if isinstance(stats, dict):
-                    self._system_stats_history.setdefault(run_id, []).append(stats)
-                    self._system_stats_history[run_id] = self._system_stats_history[run_id][-2000:]
+                    self._system_stats_history.setdefault(run_id, deque(maxlen=2000)).append(stats)
             await enqueue(raw, drop_if_full=True)
 
         graph = NetworkGraphBuilder.build(cfg.data, cfg.model)
@@ -206,12 +208,16 @@ class RunService:
             raise
         finally:
             stop_monitor.set()
-            await monitor_task
+            try:
+                await monitor_task
+            except Exception:
+                logger.warning("System monitor task failed during cleanup for run %s", run_id, exc_info=True)
             stats = self._system_stats_history.get(run_id)
             if stats is not None:
                 self.repo.save_system_stats(run_dir, stats)
             await queue.put(self._queue_sentinel)
             await sender_task
+            self._tasks.pop(run_id, None)
 
     @staticmethod
     def _select_device(requested: str) -> tuple[torch.device, str | None]:
