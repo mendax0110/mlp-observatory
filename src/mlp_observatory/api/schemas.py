@@ -4,6 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+MAX_APPROX_PARAMS = 20_000_000
+MAX_LABEL_SMOOTHING = 0.49
+
+def _default_layers() -> list[LayerConfigRequest]:
+    return [LayerConfigRequest(units=96), LayerConfigRequest(units=96), LayerConfigRequest(units=64)]
 
 class DataConfigRequest(BaseModel):
     source: Literal["synthetic", "csv"] = "synthetic"
@@ -25,7 +30,7 @@ class LayerConfigRequest(BaseModel):
 
 class ModelConfigRequest(BaseModel):
     family: Literal["mlp", "linear"] = "mlp"
-    layers: list[LayerConfigRequest] = Field(default_factory=lambda: [LayerConfigRequest(units=96), LayerConfigRequest(units=96), LayerConfigRequest(units=64)])
+    layers: list[LayerConfigRequest] = Field(default_factory=_default_layers)
     residual_every_2: bool = False
     initialization: Literal["xavier", "kaiming", "orthogonal"] = "xavier"
     preset: Literal["custom", "fast_baseline", "stable_deep", "sparse_regularized", "high_capacity"] = "custom"
@@ -46,7 +51,7 @@ class TrainConfigRequest(BaseModel):
     gradient_clip_norm: float | None = Field(default=None, gt=0.0)
     early_stopping_patience: int | None = Field(default=None, ge=1, le=1000)
     early_stopping_min_delta: float = Field(default=0.0, ge=0.0)
-    label_smoothing: float = Field(default=0.0, ge=0.0, le=0.49)
+    label_smoothing: float = Field(default=0.0, ge=0.0, le=MAX_LABEL_SMOOTHING)
     mixed_precision: bool = False
     l1_lambda: float = Field(default=0.0, ge=0.0)
     l2_lambda: float = Field(default=0.0, ge=0.0)
@@ -79,7 +84,7 @@ class StartRunRequest(BaseModel):
                 approx_params += prev * layer.units + layer.units
                 prev = layer.units
             approx_params += prev + 1
-            if approx_params > 20_000_000:
+            if approx_params > MAX_APPROX_PARAMS:
                 raise ValueError("Model too large for interactive visualization. Reduce layer sizes.")
 
         if self.data.source == "synthetic" and self.train.batch_size > self.data.samples:
